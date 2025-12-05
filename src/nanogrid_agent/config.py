@@ -44,6 +44,8 @@ class WarmPoolConfig:
     enabled: bool = True
     python_size: int = 2
     cpp_size: int = 1
+    nodejs_size: int = 2
+    go_size: int = 1
 
 
 @dataclass

@@ -46,6 +46,8 @@ s3:
 docker:
   python_image: python-base
   cpp_image: gcc-base
+  nodejs_image: nodejs-base
+  go_image: go-base
   work_dir_root: /workspace-root
   default_timeout_ms: 10000
 
@@ -53,6 +55,8 @@ warm_pool:
   enabled: true
   python_size: 2
   cpp_size: 1
+  nodejs_size: 2
+  go_size: 1
 
 redis:
   host: localhost

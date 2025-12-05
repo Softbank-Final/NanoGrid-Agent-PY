@@ -1,0 +1,13 @@
+{
+  "name": "nanogrid-nodejs-example",
+  "version": "1.0.0",
+  "description": "NanoGrid Node.js Function Example",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["nanogrid", "serverless"],
+  "author": "NanoGrid Team",
+  "license": "MIT"
+}
+

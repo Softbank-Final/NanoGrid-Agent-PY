@@ -15,7 +15,7 @@ class TaskMessage:
     {
         "requestId": "uuid-string",
         "functionId": "func-01",
-        "runtime": "python",
+        "runtime": "python",  // "python", "cpp", "nodejs", "go"
         "s3Bucket": "code-bucket-name",
         "s3Key": "func-01/v1.zip",
         "timeoutMs": 5000,
@@ -24,7 +24,7 @@ class TaskMessage:
     """
     request_id: str
     function_id: str
-    runtime: str  # "python", "cpp"
+    runtime: str  # "python", "cpp", "nodejs", "go"
     s3_bucket: str
     s3_key: str
     timeout_ms: int = 10000

@@ -26,6 +26,8 @@ class RuntimeType(Enum):
     """런타임 타입"""
     PYTHON = "python"
     CPP = "cpp"
+    NODEJS = "nodejs"
+    GO = "go"
 
 
 class WarmPoolManager:
@@ -42,10 +44,14 @@ class WarmPoolManager:
         self.pools: Dict[RuntimeType, deque] = {
             RuntimeType.PYTHON: deque(),
             RuntimeType.CPP: deque(),
+            RuntimeType.NODEJS: deque(),
+            RuntimeType.GO: deque(),
         }
         self.locks: Dict[RuntimeType, Lock] = {
             RuntimeType.PYTHON: Lock(),
             RuntimeType.CPP: Lock(),
+            RuntimeType.NODEJS: Lock(),
+            RuntimeType.GO: Lock(),
         }
 
     def initialize(self) -> None:
@@ -74,17 +80,41 @@ class WarmPoolManager:
             self.pools[RuntimeType.CPP].append(container_id)
             logger.info(f"  [{i + 1}] C++ container created: {container_id[:12]}")
 
+        # Node.js Pool
+        nodejs_size = self.config.warm_pool.nodejs_size
+        logger.info(f"Creating {nodejs_size} Node.js containers for Warm Pool")
+        for i in range(nodejs_size):
+            container_id = self._create_and_pause_container(RuntimeType.NODEJS)
+            self.pools[RuntimeType.NODEJS].append(container_id)
+            logger.info(f"  [{i + 1}] Node.js container created: {container_id[:12]}")
+
+        # Go Pool
+        go_size = self.config.warm_pool.go_size
+        logger.info(f"Creating {go_size} Go containers for Warm Pool")
+        for i in range(go_size):
+            container_id = self._create_and_pause_container(RuntimeType.GO)
+            self.pools[RuntimeType.GO].append(container_id)
+            logger.info(f"  [{i + 1}] Go container created: {container_id[:12]}")
+
         logger.info("Warm Pool initialization completed")
         logger.info(f"  - Python Pool: {len(self.pools[RuntimeType.PYTHON])} containers")
         logger.info(f"  - C++ Pool: {len(self.pools[RuntimeType.CPP])} containers")
+        logger.info(f"  - Node.js Pool: {len(self.pools[RuntimeType.NODEJS])} containers")
+        logger.info(f"  - Go Pool: {len(self.pools[RuntimeType.GO])} containers")
         logger.info("=" * 40)
 
     def _get_image_name(self, runtime_type: RuntimeType) -> str:
         """런타임 타입에 따른 이미지 이름 반환"""
         if runtime_type == RuntimeType.PYTHON:
             return self.config.docker.python_image
-        else:
+        elif runtime_type == RuntimeType.CPP:
             return self.config.docker.cpp_image
+        elif runtime_type == RuntimeType.NODEJS:
+            return self.config.docker.nodejs_image
+        elif runtime_type == RuntimeType.GO:
+            return self.config.docker.go_image
+        else:
+            raise ValueError(f"Unsupported runtime type: {runtime_type}")
 
     def _create_and_pause_container(self, runtime_type: RuntimeType) -> str:
         """컨테이너 생성 및 Pause"""
@@ -338,6 +368,10 @@ class DockerService:
             return RuntimeType.PYTHON
         elif runtime_lower in ("cpp", "c++"):
             return RuntimeType.CPP
+        elif runtime_lower in ("nodejs", "node", "javascript", "js"):
+            return RuntimeType.NODEJS
+        elif runtime_lower in ("go", "golang"):
+            return RuntimeType.GO
         else:
             raise ValueError(f"Unsupported runtime: {runtime}")
 
@@ -347,6 +381,10 @@ class DockerService:
         if runtime_lower == "python":
             return ["python", "main.py"]
         elif runtime_lower in ("cpp", "c++"):
+            return ["/bin/bash", "run.sh"]
+        elif runtime_lower in ("nodejs", "node", "javascript", "js"):
+            return ["node", "index.js"]
+        elif runtime_lower in ("go", "golang"):
             return ["/bin/bash", "run.sh"]
         else:
             raise ValueError(f"Unsupported runtime: {runtime}")
@@ -444,4 +482,3 @@ class DockerService:
                 f"⚠️ Tip: 피크 메모리 사용량({peak_mb}MB)이 현재 설정({allocated_mb}MB)을 초과했습니다. "
                 f"안정적인 실행을 위해 메모리를 {recommended_mb}MB 이상으로 늘리는 것을 권장합니다."
             )
-
