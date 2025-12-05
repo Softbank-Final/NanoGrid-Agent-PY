@@ -22,11 +22,28 @@ cd "$SCRIPT_DIR"
 echo -e "${YELLOW}현재 디렉토리: ${NC}$SCRIPT_DIR"
 echo ""
 
+# 0. Python 버전 확인
+echo -e "${YELLOW}[0/4] Python 버전 확인...${NC}"
+PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
+echo -e "${YELLOW}Python 버전: ${NC}$PYTHON_VERSION"
+
+# Python 버전이 3.9 이상인지 확인 (간단한 체크)
+PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
+PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
+
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 9 ]); then
+    echo -e "${RED}✗ Python 3.9 이상이 필요합니다 (현재: $PYTHON_VERSION)${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Python 버전 확인 완료 (3.9 이상)${NC}"
+fi
+echo ""
+
 # 1. 패키지 설치 확인
 echo -e "${YELLOW}[1/4] 패키지 설치 확인...${NC}"
 if ! pip3 show nanogrid-agent > /dev/null 2>&1; then
     echo -e "${YELLOW}패키지가 설치되지 않았습니다. 설치 중...${NC}"
-    pip3 install -e .
+    pip3 install -e . --force-reinstall
     echo -e "${GREEN}✓ 패키지 설치 완료${NC}"
 else
     echo -e "${GREEN}✓ 패키지가 이미 설치되어 있습니다${NC}"

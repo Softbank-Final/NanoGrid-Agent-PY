@@ -1,5 +1,11 @@
 # NanoGrid Agent - EC2 빠른 실행 가이드
 
+## 📋 요구사항
+
+- Python 3.9 이상
+- Docker
+- AWS 자격증명 (IAM Role)
+
 ## 🎯 가장 빠른 방법
 
 ```bash
@@ -31,6 +37,15 @@ tail -f ~/nanogrid.log
 ```
 
 ## ⚠️ 문제 해결
+
+### "Python: 3.9.x not in '>=3.10'"
+Python 버전 문제입니다.
+```bash
+# 최신 코드로 업데이트 (Python 3.9 지원)
+cd ~/NanoGrid-Agent
+git pull
+pip3 install -e . --force-reinstall
+```
 
 ### "ModuleNotFoundError: No module named 'nanogrid_agent'"
 ```bash

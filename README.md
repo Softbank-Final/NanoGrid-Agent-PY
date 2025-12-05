@@ -2,6 +2,12 @@
 
 경량화된 SQS 기반 코드 실행 에이전트.
 
+## 요구사항
+
+- Python 3.9 이상
+- Docker
+- AWS 자격증명 (IAM Role 또는 credentials)
+
 ## 기능
 
 - **SQS Long Polling**: AWS SQS에서 작업 메시지 수신
@@ -174,6 +180,22 @@ sudo systemctl status nanogrid-agent
 ```
 
 ## 트러블슈팅
+
+### ❌ "Package 'nanogrid-agent' requires a different Python: 3.9.x not in '>=3.10'"
+**원인**: pyproject.toml 파일이 최신 버전이 아님
+
+**해결**:
+```bash
+cd ~/NanoGrid-Agent
+git pull  # 최신 코드 받기
+pip3 install -e . --force-reinstall
+```
+
+또는 수동으로 pyproject.toml 수정:
+```bash
+# requires-python을 ">=3.9"로 변경
+nano pyproject.toml
+```
 
 ### ❌ "ModuleNotFoundError: No module named 'nanogrid_agent'"
 **원인**: 패키지가 설치되지 않음
