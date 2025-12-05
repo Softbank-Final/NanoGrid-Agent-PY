@@ -1,0 +1,447 @@
+"""
+Docker 서비스 및 Warm Pool 관리
+
+Docker 컨테이너 실행 및 재사용 관리
+"""
+
+import time
+from collections import deque
+from enum import Enum
+from pathlib import Path
+from threading import Lock
+from typing import Dict, List, Optional, Tuple
+
+import docker
+import structlog
+from docker.models.containers import Container
+
+from .config import AgentConfig
+from .models import TaskMessage, ExecutionResult
+
+
+logger = structlog.get_logger()
+
+
+class RuntimeType(Enum):
+    """런타임 타입"""
+    PYTHON = "python"
+    CPP = "cpp"
+
+
+class WarmPoolManager:
+    """
+    Docker Warm Pool Manager
+
+    컨테이너를 미리 생성하고 Pause 상태로 유지하다가
+    요청 시 Unpause하여 재사용
+    """
+
+    def __init__(self, config: AgentConfig, docker_client: docker.DockerClient):
+        self.config = config
+        self.client = docker_client
+        self.pools: Dict[RuntimeType, deque] = {
+            RuntimeType.PYTHON: deque(),
+            RuntimeType.CPP: deque(),
+        }
+        self.locks: Dict[RuntimeType, Lock] = {
+            RuntimeType.PYTHON: Lock(),
+            RuntimeType.CPP: Lock(),
+        }
+
+    def initialize(self) -> None:
+        """Warm Pool 초기화 - 컨테이너 미리 생성"""
+        if not self.config.warm_pool.enabled:
+            logger.info("Warm Pool is disabled")
+            return
+
+        logger.info("=" * 40)
+        logger.info("Initializing Warm Pool Manager")
+        logger.info("=" * 40)
+
+        # Python Pool
+        python_size = self.config.warm_pool.python_size
+        logger.info(f"Creating {python_size} Python containers for Warm Pool")
+        for i in range(python_size):
+            container_id = self._create_and_pause_container(RuntimeType.PYTHON)
+            self.pools[RuntimeType.PYTHON].append(container_id)
+            logger.info(f"  [{i + 1}] Python container created: {container_id[:12]}")
+
+        # C++ Pool
+        cpp_size = self.config.warm_pool.cpp_size
+        logger.info(f"Creating {cpp_size} C++ containers for Warm Pool")
+        for i in range(cpp_size):
+            container_id = self._create_and_pause_container(RuntimeType.CPP)
+            self.pools[RuntimeType.CPP].append(container_id)
+            logger.info(f"  [{i + 1}] C++ container created: {container_id[:12]}")
+
+        logger.info("Warm Pool initialization completed")
+        logger.info(f"  - Python Pool: {len(self.pools[RuntimeType.PYTHON])} containers")
+        logger.info(f"  - C++ Pool: {len(self.pools[RuntimeType.CPP])} containers")
+        logger.info("=" * 40)
+
+    def _get_image_name(self, runtime_type: RuntimeType) -> str:
+        """런타임 타입에 따른 이미지 이름 반환"""
+        if runtime_type == RuntimeType.PYTHON:
+            return self.config.docker.python_image
+        else:
+            return self.config.docker.cpp_image
+
+    def _create_and_pause_container(self, runtime_type: RuntimeType) -> str:
+        """컨테이너 생성 및 Pause"""
+        image_name = self._get_image_name(runtime_type)
+        container_name = f"nanogrid-warmpool-{runtime_type.value}-{int(time.time() * 1000)}"
+
+        logger.debug(
+            "Creating warm pool container",
+            container_name=container_name,
+            image=image_name,
+        )
+
+        # 볼륨 마운트: /tmp/task → /workspace-root
+        host_path = self.config.task_base_dir
+        container_path = self.config.docker.work_dir_root
+
+        container = self.client.containers.run(
+            image=image_name,
+            name=container_name,
+            command=["sleep", "infinity"],
+            volumes={host_path: {"bind": container_path, "mode": "rw"}},
+            detach=True,
+        )
+
+        # Pause
+        container.pause()
+        logger.debug("Paused container", container_id=container.id[:12])
+
+        return container.id
+
+    def acquire_container(self, runtime_type: RuntimeType) -> str:
+        """Pool에서 컨테이너 획득 (Unpause 포함)"""
+        logger.debug("Acquiring container", runtime=runtime_type.value)
+
+        with self.locks[runtime_type]:
+            pool = self.pools[runtime_type]
+
+            # Pool에서 컨테이너 가져오기
+            container_id = pool.popleft() if pool else None
+
+            # Pool이 비어있으면 새로 생성
+            if container_id is None:
+                logger.warning("Pool is empty, creating new container", runtime=runtime_type.value)
+                container_id = self._create_and_pause_container(runtime_type)
+
+        # Unpause
+        try:
+            container = self.client.containers.get(container_id)
+            container.unpause()
+            logger.info(
+                "Acquired and unpaused container",
+                container_id=container_id[:12],
+                runtime=runtime_type.value,
+            )
+            return container_id
+        except Exception as e:
+            logger.error("Failed to unpause container, creating new one", error=str(e))
+            self._cleanup_container(container_id)
+            container_id = self._create_and_pause_container(runtime_type)
+            container = self.client.containers.get(container_id)
+            container.unpause()
+            return container_id
+
+    def release_container(self, runtime_type: RuntimeType, container_id: str) -> None:
+        """컨테이너를 Pool에 반환 (Pause 포함)"""
+        logger.debug("Releasing container", container_id=container_id[:12], runtime=runtime_type.value)
+
+        try:
+            container = self.client.containers.get(container_id)
+
+            # 상태 확인
+            if container.status != "running":
+                logger.warning("Container is not running, removing", container_id=container_id[:12])
+                self._cleanup_container(container_id)
+                return
+
+            # Pause
+            container.pause()
+            logger.debug("Paused container", container_id=container_id[:12])
+
+            # Pool에 반환
+            with self.locks[runtime_type]:
+                self.pools[runtime_type].append(container_id)
+                pool_size = len(self.pools[runtime_type])
+
+            logger.info(
+                "Released container back to pool",
+                container_id=container_id[:12],
+                runtime=runtime_type.value,
+                pool_size=pool_size,
+            )
+
+        except Exception as e:
+            logger.error("Failed to release container", container_id=container_id[:12], error=str(e))
+            self._cleanup_container(container_id)
+
+    def _cleanup_container(self, container_id: str) -> None:
+        """컨테이너 정리 (Stop & Remove)"""
+        try:
+            container = self.client.containers.get(container_id)
+            container.stop(timeout=5)
+            logger.debug("Stopped container", container_id=container_id[:12])
+        except Exception:
+            pass
+
+        try:
+            container = self.client.containers.get(container_id)
+            container.remove(force=True)
+            logger.debug("Removed container", container_id=container_id[:12])
+        except Exception as e:
+            logger.warning("Failed to remove container", container_id=container_id[:12], error=str(e))
+
+    def cleanup(self) -> None:
+        """모든 Pool 컨테이너 정리"""
+        logger.info("Cleaning up Warm Pool containers...")
+
+        for runtime_type, pool in self.pools.items():
+            logger.info(f"Cleaning up {runtime_type.value} pool ({len(pool)} containers)")
+            while pool:
+                container_id = pool.popleft()
+                self._cleanup_container(container_id)
+
+        logger.info("Warm Pool cleanup completed")
+
+
+class DockerService:
+    """Docker 컨테이너 실행 서비스"""
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        docker_client: docker.DockerClient,
+        warm_pool: WarmPoolManager,
+    ):
+        self.config = config
+        self.client = docker_client
+        self.warm_pool = warm_pool
+
+    def run_task(self, task: TaskMessage, work_dir: Path) -> ExecutionResult:
+        """
+        Docker 컨테이너에서 작업 실행
+
+        Args:
+            task: 작업 메시지
+            work_dir: 작업 디렉터리
+
+        Returns:
+            실행 결과
+        """
+        request_id = task.request_id
+        function_id = task.function_id
+        runtime = task.runtime
+
+        logger.info(
+            "Starting execution",
+            request_id=request_id,
+            runtime=runtime,
+        )
+
+        # RuntimeType 결정
+        runtime_type = self._resolve_runtime_type(runtime)
+        container_id: Optional[str] = None
+        start_time = time.time()
+
+        try:
+            # 1. Warm Pool에서 컨테이너 획득
+            container_id = self.warm_pool.acquire_container(runtime_type)
+            logger.info(
+                "Acquired container from Warm Pool",
+                container_id=container_id[:12],
+                request_id=request_id,
+            )
+
+            # 2. Output 디렉터리 생성
+            output_dir = self._create_output_directory(request_id)
+            logger.debug("Created output directory", output_dir=str(output_dir))
+
+            # 3. 컨테이너 내부 작업 디렉터리 경로
+            container_work_dir = f"{self.config.docker.work_dir_root}/{request_id}"
+            logger.debug("Container work dir", path=container_work_dir)
+
+            # 4. 런타임별 실행 커맨드
+            cmd = self._build_command(runtime)
+            logger.info("Executing command", container_id=container_id[:12], cmd=cmd)
+
+            # 5. docker exec로 명령 실행
+            exit_code, stdout, stderr = self._execute_in_container(
+                container_id, container_work_dir, cmd
+            )
+
+            duration_millis = int((time.time() - start_time) * 1000)
+
+            # 6. 메모리 측정
+            peak_memory_bytes = self._measure_memory(container_id)
+
+            # 7. 최적화 팁 생성
+            optimization_tip = self._create_optimization_tip(task, peak_memory_bytes)
+
+            logger.info(
+                "Execution finished",
+                request_id=request_id,
+                exit_code=exit_code,
+                duration_ms=duration_millis,
+                peak_memory_bytes=peak_memory_bytes,
+            )
+
+            return ExecutionResult(
+                request_id=request_id,
+                function_id=function_id,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                duration_millis=duration_millis,
+                success=(exit_code == 0),
+                peak_memory_bytes=peak_memory_bytes,
+                optimization_tip=optimization_tip,
+                output_files=[],  # TODO: Output 파일 업로드
+            )
+
+        except Exception as e:
+            duration_millis = int((time.time() - start_time) * 1000)
+            logger.error(
+                "Execution failed",
+                request_id=request_id,
+                error=str(e),
+            )
+
+            return ExecutionResult(
+                request_id=request_id,
+                function_id=function_id,
+                exit_code=-1,
+                stdout="",
+                stderr=f"Execution failed: {e}",
+                duration_millis=duration_millis,
+                success=False,
+            )
+
+        finally:
+            # 컨테이너 반환
+            if container_id:
+                try:
+                    self.warm_pool.release_container(runtime_type, container_id)
+                    logger.debug("Released container", container_id=container_id[:12])
+                except Exception as e:
+                    logger.error("Failed to release container", error=str(e))
+
+    def _resolve_runtime_type(self, runtime: str) -> RuntimeType:
+        """런타임 문자열을 RuntimeType으로 변환"""
+        runtime_lower = runtime.lower()
+        if runtime_lower == "python":
+            return RuntimeType.PYTHON
+        elif runtime_lower in ("cpp", "c++"):
+            return RuntimeType.CPP
+        else:
+            raise ValueError(f"Unsupported runtime: {runtime}")
+
+    def _build_command(self, runtime: str) -> List[str]:
+        """런타임별 실행 커맨드 구성"""
+        runtime_lower = runtime.lower()
+        if runtime_lower == "python":
+            return ["python", "main.py"]
+        elif runtime_lower in ("cpp", "c++"):
+            return ["/bin/bash", "run.sh"]
+        else:
+            raise ValueError(f"Unsupported runtime: {runtime}")
+
+    def _execute_in_container(
+        self, container_id: str, work_dir: str, cmd: List[str]
+    ) -> Tuple[int, str, str]:
+        """컨테이너 내부에서 명령 실행"""
+        try:
+            container = self.client.containers.get(container_id)
+
+            # docker exec
+            result = container.exec_run(
+                cmd=cmd,
+                workdir=work_dir,
+                demux=True,  # stdout/stderr 분리
+            )
+
+            exit_code = result.exit_code
+            stdout_bytes, stderr_bytes = result.output
+
+            stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
+            stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
+
+            logger.debug(
+                "Exec finished",
+                exit_code=exit_code,
+                stdout_len=len(stdout),
+                stderr_len=len(stderr),
+            )
+
+            return exit_code, stdout, stderr
+
+        except Exception as e:
+            logger.error("Failed to execute in container", error=str(e))
+            return -1, "", f"Execution failed: {e}"
+
+    def _create_output_directory(self, request_id: str) -> Path:
+        """Output 디렉터리 생성"""
+        output_dir = Path(self.config.output.base_dir) / request_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    def _measure_memory(self, container_id: str) -> Optional[int]:
+        """컨테이너 메모리 사용량 측정"""
+        try:
+            container = self.client.containers.get(container_id)
+            stats = container.stats(stream=False)
+
+            memory_stats = stats.get("memory_stats", {})
+            usage = memory_stats.get("usage")
+
+            if usage is not None:
+                logger.debug("Memory usage measured", container_id=container_id[:12], bytes=usage)
+                return usage
+            return None
+
+        except Exception as e:
+            logger.warning("Failed to measure memory", error=str(e))
+            return None
+
+    def _create_optimization_tip(
+        self, task: TaskMessage, peak_memory_bytes: Optional[int]
+    ) -> Optional[str]:
+        """메모리 최적화 팁 생성"""
+        if peak_memory_bytes is None:
+            return "메모리 사용량 정보를 가져올 수 없습니다."
+
+        allocated_mb = task.memory_mb or 128
+        allocated_bytes = allocated_mb * 1024 * 1024
+        ratio = peak_memory_bytes / allocated_bytes
+        peak_mb = peak_memory_bytes // (1024 * 1024)
+
+        if ratio < 0.3:
+            recommended_mb = int(peak_mb * 1.5) or 1
+            savings = (1.0 - recommended_mb / allocated_mb) * 100
+            return (
+                f"💡 Tip: 현재 메모리 설정({allocated_mb}MB)에 비해 실제 사용량({peak_mb}MB)이 "
+                f"매우 낮습니다. 메모리를 {recommended_mb}MB 정도로 줄이면 비용을 약 {savings:.0f}% 절감할 수 있습니다."
+            )
+        elif ratio < 0.7:
+            recommended_mb = int(peak_mb * 1.3) or 1
+            return (
+                f"✅ Tip: 현재 메모리 설정({allocated_mb}MB)이 비교적 여유 있습니다(사용량: {peak_mb}MB). "
+                f"더 절감하려면 {recommended_mb}MB로 조정할 수 있습니다."
+            )
+        elif ratio <= 1.0:
+            return (
+                f"✅ Tip: 현재 메모리 설정({allocated_mb}MB)이 적절합니다. "
+                f"피크 사용량({peak_mb}MB)이 설정 범위 내에 있습니다."
+            )
+        else:
+            recommended_mb = int(peak_mb * 1.2)
+            return (
+                f"⚠️ Tip: 피크 메모리 사용량({peak_mb}MB)이 현재 설정({allocated_mb}MB)을 초과했습니다. "
+                f"안정적인 실행을 위해 메모리를 {recommended_mb}MB 이상으로 늘리는 것을 권장합니다."
+            )
+

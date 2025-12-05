@@ -1,0 +1,24 @@
+[Unit]
+Description=NanoGrid Agent - SQS 기반 코드 실행 에이전트
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/nanogrid-agent
+Environment="PATH=/opt/nanogrid-agent/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/nanogrid-agent/venv/bin/nanogrid-agent --config /opt/nanogrid-agent/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# 리소스 제한
+MemoryMax=512M
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
+

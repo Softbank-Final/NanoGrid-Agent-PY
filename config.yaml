@@ -1,0 +1,43 @@
+# NanoGrid Agent 기본 설정
+
+aws:
+  region: ap-northeast-2
+
+sqs:
+  queue_url: https://sqs.ap-northeast-2.amazonaws.com/769213334367/nanogrid-task-queue
+  wait_time_seconds: 20
+  max_number_of_messages: 10
+
+s3:
+  code_bucket: nanogrid-code-bucket
+  user_data_bucket: nanogrid-user-data
+
+docker:
+  python_image: python-base
+  cpp_image: gcc-base
+  work_dir_root: /workspace-root
+  default_timeout_ms: 10000
+  output_mount_path: /output
+
+warm_pool:
+  enabled: true
+  python_size: 2
+  cpp_size: 1
+
+polling:
+  enabled: true
+  fixed_delay_seconds: 1.0
+
+redis:
+  host: nanogrid-redis.p29xhw.0001.apn2.cache.amazonaws.com
+  port: 6379
+  password: ""
+  result_prefix: "result:"
+
+output:
+  enabled: true
+  base_dir: /tmp/output
+  s3_prefix: outputs
+
+task_base_dir: /tmp/task
+
