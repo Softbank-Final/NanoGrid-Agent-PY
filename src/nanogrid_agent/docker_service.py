@@ -296,6 +296,9 @@ class DockerService:
             container_work_dir = f"{self.config.docker.work_dir_root}/{request_id}"
             logger.debug("Container work dir", path=container_work_dir)
 
+            # 3.5. 컨테이너 내부에서 작업 디렉터리 존재 확인 및 동기화
+            self._ensure_workdir_in_container(container_id, container_work_dir, work_dir)
+
             # 4. 런타임별 실행 커맨드
             cmd = self._build_command(runtime)
             logger.info("Executing command", container_id=container_id[:12], cmd=cmd)
@@ -374,6 +377,86 @@ class DockerService:
             return RuntimeType.GO
         else:
             raise ValueError(f"Unsupported runtime: {runtime}")
+
+    def _ensure_workdir_in_container(
+        self, container_id: str, container_work_dir: str, host_work_dir: Path
+    ) -> None:
+        """
+        컨테이너 내부에서 작업 디렉터리 존재 확인 및 동기화
+
+        볼륨 마운트된 디렉터리가 컨테이너에서 인식되지 않는 경우를 처리
+        """
+        try:
+            container = self.client.containers.get(container_id)
+
+            # 디렉터리 존재 확인
+            check_result = container.exec_run(
+                cmd=["test", "-d", container_work_dir],
+                workdir="/",
+            )
+
+            if check_result.exit_code != 0:
+                logger.warning(
+                    "Work directory not found in container, creating...",
+                    container_work_dir=container_work_dir,
+                )
+
+                # 디렉터리 생성
+                mkdir_result = container.exec_run(
+                    cmd=["mkdir", "-p", container_work_dir],
+                    workdir="/",
+                )
+
+                if mkdir_result.exit_code != 0:
+                    logger.error(
+                        "Failed to create work directory in container",
+                        container_work_dir=container_work_dir,
+                        error=mkdir_result.output.decode("utf-8", errors="replace"),
+                    )
+                    raise RuntimeError(f"Failed to create work directory: {container_work_dir}")
+
+                # 호스트에서 파일 복사 (docker cp 사용)
+                import subprocess
+
+                # docker cp로 파일 복사
+                cp_cmd = [
+                    "docker", "cp",
+                    f"{host_work_dir}/.",  # 디렉터리 내용 전체
+                    f"{container_id}:{container_work_dir}/"
+                ]
+
+                result = subprocess.run(cp_cmd, capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    logger.error(
+                        "Failed to copy files to container",
+                        stderr=result.stderr,
+                    )
+                    raise RuntimeError(f"Failed to copy files to container: {result.stderr}")
+
+                logger.info(
+                    "Successfully copied files to container",
+                    container_work_dir=container_work_dir,
+                )
+            else:
+                # 디렉터리 내용 확인
+                ls_result = container.exec_run(
+                    cmd=["ls", "-la", container_work_dir],
+                    workdir="/",
+                )
+                logger.debug(
+                    "Work directory exists in container",
+                    container_work_dir=container_work_dir,
+                    contents=ls_result.output.decode("utf-8", errors="replace")[:500],
+                )
+
+        except Exception as e:
+            logger.error(
+                "Failed to ensure work directory in container",
+                container_work_dir=container_work_dir,
+                error=str(e),
+            )
+            raise
 
     def _build_command(self, runtime: str) -> List[str]:
         """런타임별 실행 커맨드 구성"""
