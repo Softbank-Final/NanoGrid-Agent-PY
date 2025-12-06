@@ -25,9 +25,25 @@ class GcpStorageService:
         if self._bucket is None:
             try:
                 from google.cloud import storage
+                from google.oauth2 import service_account
 
-                self._client = storage.Client()
+                # credentials_path가 설정되어 있으면 해당 파일 사용
+                credentials_path = self.config.gcp.credentials_path
+                if credentials_path and os.path.exists(credentials_path):
+                    logger.info(f"🔑 Using credentials from: {credentials_path}")
+                    credentials = service_account.Credentials.from_service_account_file(credentials_path)
+                    self._client = storage.Client(credentials=credentials)
+                else:
+                    # 환경변수 GOOGLE_APPLICATION_CREDENTIALS 확인
+                    env_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+                    if env_creds:
+                        logger.info(f"🔑 Using credentials from env: {env_creds}")
+                    else:
+                        logger.warning("⚠️ No credentials path configured, using default credentials")
+                    self._client = storage.Client()
+
                 bucket_name = self.config.gcp.bucket_name
+                logger.info(f"🔄 Getting GCP bucket...")
                 self._bucket = self._client.bucket(bucket_name)
                 logger.info("GCP Storage initialized", bucket=bucket_name)
             except ImportError:
