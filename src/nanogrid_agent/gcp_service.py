@@ -54,27 +54,40 @@ class GcpStorageService:
             logger.debug("GCP Storage is disabled, skipping upload")
             return ""
 
+        logger.info("=" * 40)
+        logger.info("📤 Starting GCP Upload")
+        logger.info(f"  Job ID: {job_id}")
+        logger.info(f"  Extension: {extension}")
+        logger.info(f"  Code size: {len(code)} bytes")
+        logger.info("=" * 40)
+
         try:
+            logger.info("🔄 Getting GCP bucket...")
             bucket = self._get_bucket()
+
             blob_path = f"codes/{job_id}.{extension}"
+            logger.info(f"📁 Blob path: {blob_path}")
+
             blob = bucket.blob(blob_path)
 
+            logger.info("⬆️ Uploading to GCP Storage...")
             blob.upload_from_string(code, content_type="text/plain")
 
             gcs_uri = f"gs://{self.config.gcp.bucket_name}/{blob_path}"
-            logger.info(
-                "Code uploaded to GCP",
-                job_id=job_id,
-                gcs_uri=gcs_uri,
-            )
+
+            logger.info("=" * 40)
+            logger.info("✅ GCP Upload SUCCESS")
+            logger.info(f"  GCS URI: {gcs_uri}")
+            logger.info("=" * 40)
+
             return gcs_uri
 
         except Exception as e:
-            logger.error(
-                "Failed to upload code to GCP",
-                job_id=job_id,
-                error=str(e),
-            )
+            logger.error("=" * 40)
+            logger.error("❌ GCP Upload FAILED")
+            logger.error(f"  Job ID: {job_id}")
+            logger.error(f"  Error: {str(e)}")
+            logger.error("=" * 40)
             raise
 
     def download_code(self, job_id: str, extension: str = "py") -> str:

@@ -45,7 +45,7 @@ output:
 
 # GCP Cloud Storage 설정 (코드 저장용)
 gcp:
-  enabled: false
+  enabled: true
   bucket_name: nanogird_gcp_bucket
   credentials_path: /etc/ncp-test-465906-417c34e96c23.json
 

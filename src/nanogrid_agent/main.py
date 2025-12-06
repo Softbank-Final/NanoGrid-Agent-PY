@@ -82,7 +82,19 @@ def main(config_path: Optional[str] = None) -> int:
         docker_service = DockerService(config, docker_client, warm_pool)
         redis_publisher = RedisResultPublisher(config)
         cloudwatch_publisher = CloudWatchMetricsPublisher(config)
-        gcp_service = GcpStorageService(config) if config.gcp.enabled else None
+
+        # GCP 서비스 초기화
+        gcp_service = None
+        if config.gcp.enabled:
+            logger.info("=" * 40)
+            logger.info("🌐 Initializing GCP Storage Service")
+            logger.info(f"  Bucket: {config.gcp.bucket_name}")
+            logger.info(f"  Credentials: {config.gcp.credentials_path}")
+            logger.info("=" * 40)
+            gcp_service = GcpStorageService(config)
+            logger.info("✅ GCP Storage Service initialized")
+        else:
+            logger.info("⏭️ GCP Storage is disabled")
 
         # SQS Poller
         poller = SqsPoller(
