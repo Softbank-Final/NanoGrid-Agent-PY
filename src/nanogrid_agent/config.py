@@ -34,6 +34,8 @@ class S3Config:
 class DockerConfig:
     python_image: str = "python-base"
     cpp_image: str = "gcc-base"
+    nodejs_image: str = "nodejs-base"
+    go_image: str = "go-base"
     work_dir_root: str = "/workspace-root"
     default_timeout_ms: int = 10000
     output_mount_path: str = "/output"
@@ -135,6 +137,8 @@ class AgentConfig:
         # Docker
         config.docker.python_image = os.getenv("DOCKER_PYTHON_IMAGE", config.docker.python_image)
         config.docker.cpp_image = os.getenv("DOCKER_CPP_IMAGE", config.docker.cpp_image)
+        config.docker.nodejs_image = os.getenv("DOCKER_NODEJS_IMAGE", config.docker.nodejs_image)
+        config.docker.go_image = os.getenv("DOCKER_GO_IMAGE", config.docker.go_image)
         config.docker.work_dir_root = os.getenv("DOCKER_WORK_DIR_ROOT", config.docker.work_dir_root)
         config.docker.default_timeout_ms = int(os.getenv("DOCKER_TIMEOUT_MS", config.docker.default_timeout_ms))
 
