@@ -47,7 +47,7 @@ output:
 gcp:
   enabled: false
   bucket_name: nanogird_gcp_bucket
-  credentials_path: /etc/gcp-key.json
+  credentials_path: /etc/ncp-test-465906-417c34e96c23.json
 
 task_base_dir: /tmp/task
 
