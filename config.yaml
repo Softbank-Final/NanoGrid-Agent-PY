@@ -43,5 +43,11 @@ output:
   base_dir: /tmp/output
   s3_prefix: outputs
 
+# GCP Cloud Storage 설정 (코드 저장용)
+gcp:
+  enabled: false
+  bucket_name: nanogird_gcp_bucket
+  credentials_path: /etc/gcp-key.json
+
 task_base_dir: /tmp/task
 

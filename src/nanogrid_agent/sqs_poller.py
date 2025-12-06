@@ -33,12 +33,14 @@ class SqsPoller:
         docker_service: DockerService,
         redis_publisher: RedisResultPublisher,
         cloudwatch_publisher: CloudWatchMetricsPublisher,
+        gcp_service=None,
     ):
         self.config = config
         self.s3_service = s3_service
         self.docker_service = docker_service
         self.redis_publisher = redis_publisher
         self.cloudwatch_publisher = cloudwatch_publisher
+        self.gcp_service = gcp_service
 
         self.sqs_client = boto3.client("sqs", region_name=config.aws.region)
         self._running = False
@@ -164,6 +166,21 @@ class SqsPoller:
             except Exception as e:
                 logger.error("❌ Redis publish failed", request_id=task.request_id, error=str(e))
 
+            # GCP에 코드 업로드 (활성화된 경우)
+            if self.gcp_service:
+                try:
+                    # work_dir에서 코드 파일 읽기
+                    code_content = self._read_code_from_workdir(work_dir, task.runtime)
+                    if code_content:
+                        gcs_uri = self.gcp_service.upload_code(
+                            task.request_id,
+                            code_content,
+                            extension=self._get_extension_for_runtime(task.runtime)
+                        )
+                        logger.info("✅ Code uploaded to GCP", request_id=task.request_id, gcs_uri=gcs_uri)
+                except Exception as e:
+                    logger.warning("⚠️ GCP upload failed (continuing)", request_id=task.request_id, error=str(e))
+
             # 메시지 삭제
             self._delete_message(queue_url, receipt_handle)
             logger.info("[DONE][OK]", request_id=task.request_id)
@@ -205,4 +222,50 @@ class SqsPoller:
             logger.debug("Message deleted from SQS")
         except ClientError as e:
             logger.error("Failed to delete message", error=str(e))
+
+    def _get_extension_for_runtime(self, runtime: str) -> str:
+        """런타임에 맞는 파일 확장자 반환"""
+        extensions = {
+            "python": "py",
+            "nodejs": "js",
+            "go": "go",
+            "cpp": "cpp",
+        }
+        return extensions.get(runtime, "txt")
+
+    def _read_code_from_workdir(self, work_dir, runtime: str) -> Optional[str]:
+        """작업 디렉토리에서 코드 파일 읽기"""
+        import os
+        from pathlib import Path
+
+        extension = self._get_extension_for_runtime(runtime)
+
+        # 메인 파일명 패턴
+        main_files = {
+            "python": ["main.py", "app.py", "index.py"],
+            "nodejs": ["index.js", "main.js", "app.js"],
+            "go": ["main.go"],
+            "cpp": ["main.cpp", "main.cc"],
+        }
+
+        work_path = Path(work_dir)
+
+        # 1. 메인 파일 찾기
+        for filename in main_files.get(runtime, []):
+            file_path = work_path / filename
+            if file_path.exists():
+                try:
+                    return file_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+
+        # 2. 확장자로 첫 번째 파일 찾기
+        for file_path in work_path.glob(f"*.{extension}"):
+            try:
+                return file_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        return None
+
 

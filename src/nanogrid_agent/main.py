@@ -59,6 +59,7 @@ def main(config_path: Optional[str] = None) -> int:
         logger.info(f"  SQS Queue: {config.sqs.queue_url}")
         logger.info(f"  Redis: {config.redis.host}:{config.redis.port}")
         logger.info(f"  Warm Pool: {'enabled' if config.warm_pool.enabled else 'disabled'}")
+        logger.info(f"  GCP Storage: {'enabled' if config.gcp.enabled else 'disabled'}")
 
         # Docker 클라이언트 초기화
         docker_client = docker.from_env()
@@ -69,6 +70,7 @@ def main(config_path: Optional[str] = None) -> int:
         from .s3_service import S3CodeStorageService
         from .redis_publisher import RedisResultPublisher
         from .cloudwatch_publisher import CloudWatchMetricsPublisher
+        from .gcp_service import GcpStorageService
         from .sqs_poller import SqsPoller
 
         # Warm Pool Manager
@@ -80,6 +82,7 @@ def main(config_path: Optional[str] = None) -> int:
         docker_service = DockerService(config, docker_client, warm_pool)
         redis_publisher = RedisResultPublisher(config)
         cloudwatch_publisher = CloudWatchMetricsPublisher(config)
+        gcp_service = GcpStorageService(config) if config.gcp.enabled else None
 
         # SQS Poller
         poller = SqsPoller(
@@ -88,6 +91,7 @@ def main(config_path: Optional[str] = None) -> int:
             docker_service=docker_service,
             redis_publisher=redis_publisher,
             cloudwatch_publisher=cloudwatch_publisher,
+            gcp_service=gcp_service,
         )
 
         # 시그널 핸들러 설정
@@ -109,6 +113,8 @@ def main(config_path: Optional[str] = None) -> int:
         logger.info("Shutting down...")
         warm_pool.cleanup()
         redis_publisher.close()
+        if gcp_service:
+            gcp_service.close()
 
         logger.info("NanoGrid Agent stopped")
         return 0

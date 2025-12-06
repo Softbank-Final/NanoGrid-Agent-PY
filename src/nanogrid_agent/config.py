@@ -72,6 +72,14 @@ class OutputConfig:
 
 
 @dataclass
+class GcpConfig:
+    """GCP Cloud Storage 설정"""
+    enabled: bool = False
+    bucket_name: str = "nanogird_gcp_bucket"
+    credentials_path: str = "/etc/gcp-key.json"
+
+
+@dataclass
 class AgentConfig:
     """에이전트 통합 설정"""
     aws: AwsConfig = field(default_factory=AwsConfig)
@@ -82,6 +90,7 @@ class AgentConfig:
     polling: PollingConfig = field(default_factory=PollingConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    gcp: GcpConfig = field(default_factory=GcpConfig)
     task_base_dir: str = "/tmp/task"
 
     @classmethod
@@ -105,6 +114,8 @@ class AgentConfig:
             config.redis = RedisConfig(**data["redis"])
         if "output" in data:
             config.output = OutputConfig(**data["output"])
+        if "gcp" in data:
+            config.gcp = GcpConfig(**data["gcp"])
         if "task_base_dir" in data:
             config.task_base_dir = data["task_base_dir"]
 
@@ -157,6 +168,11 @@ class AgentConfig:
         config.output.enabled = os.getenv("OUTPUT_ENABLED", "true").lower() == "true"
         config.output.base_dir = os.getenv("OUTPUT_BASE_DIR", config.output.base_dir)
         config.output.s3_prefix = os.getenv("OUTPUT_S3_PREFIX", config.output.s3_prefix)
+
+        # GCP
+        config.gcp.enabled = os.getenv("GCP_ENABLED", "false").lower() == "true"
+        config.gcp.bucket_name = os.getenv("GCP_BUCKET_NAME", config.gcp.bucket_name)
+        config.gcp.credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", config.gcp.credentials_path)
 
         # Task
         config.task_base_dir = os.getenv("TASK_BASE_DIR", config.task_base_dir)

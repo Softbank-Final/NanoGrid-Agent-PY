@@ -89,6 +89,23 @@ class RedisResultPublisher:
             )
             # Redis 전송 실패해도 Worker는 계속 동작
 
+    def save_job_status(self, job_id: str, status: str, ttl_seconds: int = 86400) -> None:
+        """
+        작업 상태를 Redis에 저장
+
+        Args:
+            job_id: 작업 ID
+            status: 상태 (SUCCESS, FAILED 등)
+            ttl_seconds: TTL (기본값: 24시간)
+        """
+        key = f"job:{job_id}:status"
+        try:
+            client = self._get_client()
+            client.setex(key, timedelta(seconds=ttl_seconds), status)
+            logger.info("Job status saved", key=key, status=status, ttl_seconds=ttl_seconds)
+        except Exception as e:
+            logger.error("Failed to save job status", job_id=job_id, error=str(e))
+
     def close(self) -> None:
         """Redis 연결 종료"""
         if self._client is not None:
