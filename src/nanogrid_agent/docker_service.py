@@ -4,6 +4,7 @@ Docker 서비스 및 Warm Pool 관리
 Docker 컨테이너 실행 및 재사용 관리
 """
 
+import json
 import time
 from collections import deque
 from enum import Enum
@@ -303,9 +304,20 @@ class DockerService:
             cmd = self._build_command(runtime)
             logger.info("Executing command", container_id=container_id[:12], cmd=cmd)
 
-            # 5. docker exec로 명령 실행
+            # 5. input 데이터를 JSON 문자열로 변환 (stdin으로 전달)
+            stdin_data = None
+            if task.input:
+                stdin_data = json.dumps(task.input, ensure_ascii=False)
+                logger.info(
+                    "Input data will be passed via stdin",
+                    input_size=len(stdin_data),
+                    request_id=request_id,
+                )
+
+            # 6. docker exec로 명령 실행 (stdin 전달)
             exit_code, stdout, stderr = self._execute_in_container(
-                container_id, container_work_dir, cmd
+                container_id, container_work_dir, cmd,
+                stdin_data=stdin_data  # stdin으로 input 전달
             )
 
             duration_millis = int((time.time() - start_time) * 1000)
@@ -473,31 +485,119 @@ class DockerService:
             raise ValueError(f"Unsupported runtime: {runtime}")
 
     def _execute_in_container(
-        self, container_id: str, work_dir: str, cmd: List[str]
+        self, container_id: str, work_dir: str, cmd: List[str],
+        stdin_data: Optional[str] = None
     ) -> Tuple[int, str, str]:
-        """컨테이너 내부에서 명령 실행"""
+        """
+        컨테이너 내부에서 명령 실행
+
+        Args:
+            container_id: Docker 컨테이너 ID
+            work_dir: 컨테이너 내부 작업 디렉터리
+            cmd: 실행할 명령어
+            stdin_data: stdin으로 전달할 데이터 (JSON 문자열)
+
+        Returns:
+            (exit_code, stdout, stderr) 튜플
+        """
         try:
             container = self.client.containers.get(container_id)
 
-            # docker exec
-            result = container.exec_run(
-                cmd=cmd,
-                workdir=work_dir,
-                demux=True,  # stdout/stderr 분리
-            )
+            if stdin_data:
+                # stdin 데이터가 있는 경우: API를 통해 stdin 전달
+                logger.debug(
+                    "Executing with stdin",
+                    stdin_size=len(stdin_data),
+                    cmd=cmd,
+                )
 
-            exit_code = result.exit_code
-            stdout_bytes, stderr_bytes = result.output
+                # exec_create로 실행 환경 생성
+                exec_id = self.client.api.exec_create(
+                    container_id,
+                    cmd=cmd,
+                    workdir=work_dir,
+                    stdin=True,
+                    stdout=True,
+                    stderr=True,
+                    tty=False,
+                )
 
-            stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
-            stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
+                # socket 모드로 exec 시작
+                socket = self.client.api.exec_start(
+                    exec_id['Id'],
+                    socket=True,
+                    demux=True,
+                )
 
-            logger.debug(
-                "Exec finished",
-                exit_code=exit_code,
-                stdout_len=len(stdout),
-                stderr_len=len(stderr),
-            )
+                # stdin으로 데이터 전송
+                sock = socket._sock
+                sock.sendall(stdin_data.encode('utf-8'))
+                sock.shutdown(1)  # SHUT_WR - 쓰기 종료
+
+                # 출력 읽기
+                stdout_chunks = []
+                stderr_chunks = []
+
+                while True:
+                    try:
+                        data = sock.recv(4096)
+                        if not data:
+                            break
+                        # Docker API의 multiplexed stream 형식 파싱
+                        # 처음 8바이트는 헤더: [stream_type(1), 0, 0, 0, size(4)]
+                        while len(data) >= 8:
+                            stream_type = data[0]
+                            size = int.from_bytes(data[4:8], 'big')
+                            if len(data) < 8 + size:
+                                break
+                            payload = data[8:8+size]
+                            if stream_type == 1:  # stdout
+                                stdout_chunks.append(payload)
+                            elif stream_type == 2:  # stderr
+                                stderr_chunks.append(payload)
+                            data = data[8+size:]
+                    except Exception:
+                        break
+
+                sock.close()
+
+                # exec 결과 확인
+                exec_info = self.client.api.exec_inspect(exec_id['Id'])
+                exit_code = exec_info.get('ExitCode', -1)
+
+                stdout = b''.join(stdout_chunks).decode('utf-8', errors='replace')
+                stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+
+                logger.debug(
+                    "Exec with stdin finished",
+                    exit_code=exit_code,
+                    stdout_len=len(stdout),
+                    stderr_len=len(stderr),
+                )
+
+                return exit_code, stdout, stderr
+
+            else:
+                # stdin 데이터가 없는 경우: 기존 방식
+                # docker exec
+                result = container.exec_run(
+                    cmd=cmd,
+                    workdir=work_dir,
+                    demux=True,  # stdout/stderr 분리
+                )
+
+                exit_code = result.exit_code
+                stdout_bytes, stderr_bytes = result.output
+
+                stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
+                stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
+
+                logger.debug(
+                    "Exec finished",
+                    exit_code=exit_code,
+                    stdout_len=len(stdout),
+                    stderr_len=len(stderr),
+                )
 
             return exit_code, stdout, stderr
 

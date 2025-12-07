@@ -19,7 +19,8 @@ class TaskMessage:
         "s3Bucket": "code-bucket-name",
         "s3Key": "func-01/v1.zip",
         "timeoutMs": 5000,
-        "memoryMb": 128
+        "memoryMb": 128,
+        "input": {"key": "value"}  // 사용자 함수에 stdin으로 전달될 입력 데이터
     }
     """
     request_id: str
@@ -29,6 +30,7 @@ class TaskMessage:
     s3_key: str
     timeout_ms: int = 10000
     memory_mb: Optional[int] = None
+    input: Optional[dict] = None  # Controller에서 전달받는 input 데이터 (stdin으로 전달)
 
     @classmethod
     def from_dict(cls, data: dict) -> "TaskMessage":
@@ -41,13 +43,15 @@ class TaskMessage:
             s3_key=data.get("s3Key", ""),
             timeout_ms=data.get("timeoutMs", 10000),
             memory_mb=data.get("memoryMb"),
+            input=data.get("input"),  # input 필드 추가
         )
 
     def __str__(self) -> str:
+        input_preview = str(self.input)[:50] + "..." if self.input and len(str(self.input)) > 50 else str(self.input)
         return (
             f"TaskMessage[requestId={self.request_id}, functionId={self.function_id}, "
             f"runtime={self.runtime}, s3Bucket={self.s3_bucket}, s3Key={self.s3_key}, "
-            f"timeoutMs={self.timeout_ms}, memoryMb={self.memory_mb}]"
+            f"timeoutMs={self.timeout_ms}, memoryMb={self.memory_mb}, input={input_preview}]"
         )
 
 
