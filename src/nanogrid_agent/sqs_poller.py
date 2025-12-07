@@ -166,8 +166,8 @@ class SqsPoller:
             except Exception as e:
                 logger.error("❌ Redis publish failed", request_id=task.request_id, error=str(e))
 
-            # GCP에 코드 업로드 (활성화된 경우)
-            if self.gcp_service:
+            # GCP에 코드 업로드 (활성화되고 실행 성공한 경우에만)
+            if self.gcp_service and result.success:
                 try:
                     # work_dir에서 코드 파일 읽기
                     code_content = self._read_code_from_workdir(work_dir, task.runtime)
@@ -180,6 +180,8 @@ class SqsPoller:
                         logger.info("✅ Code uploaded to GCP", request_id=task.request_id, gcs_uri=gcs_uri)
                 except Exception as e:
                     logger.warning("⚠️ GCP upload failed (continuing)", request_id=task.request_id, error=str(e))
+            elif self.gcp_service and not result.success:
+                logger.info("⏭️ Skipping GCP upload (execution failed)", request_id=task.request_id)
 
             # 메시지 삭제
             self._delete_message(queue_url, receipt_handle)
